@@ -35,7 +35,6 @@ function getApplicationStatusPresentation(statusValue) {
 }
 
 export default {
-    slashOnly: true,
     data: new SlashCommandBuilder()
         .setName("apply")
         .setDescription("Manage role applications")
@@ -267,6 +266,13 @@ async function handleList(interaction) {
 }
 
 async function handleSubmit(interaction, settings) {
+    if (interaction._isPrefixCommand) {
+        return await replyUserError(interaction, {
+            type: ErrorTypes.UNKNOWN,
+            message: 'Submitting an application opens a form, which requires the slash command. Use `/apply submit application:<name>` instead.',
+        });
+    }
+
     const applicationName = interaction.options.getString("application");
     const member = interaction.member;
 

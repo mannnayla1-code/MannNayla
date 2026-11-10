@@ -1,15 +1,6 @@
 /**
- * Prefix command restrictions — dashboard and advanced setup flows stay slash-only.
+ * Prefix command restrictions — interactive dashboard and setup flows stay slash-only.
  */
-
-/** Top-level commands that cannot be invoked via prefix at all. */
-export const SLASH_ONLY_COMMANDS = new Set([
-  'configwizard',
-  'help',
-  'embedbuilder',
-  'wipedata',
-  'apply',
-]);
 
 /** Subcommands blocked for every command when invoked via prefix. */
 export const GLOBAL_BLOCKED_SUBCOMMANDS = new Set([
@@ -79,11 +70,7 @@ export function getPrefixRestriction(command, args, resolveSubcommandAlias) {
   const commandJson = command.data.toJSON();
   const commandName = commandJson.name?.toLowerCase();
 
-  if (command.prefixOnly === false || command.slashOnly === true) {
-    return { blocked: true, reason: 'This command is only available as a slash command.' };
-  }
-
-  if (SLASH_ONLY_COMMANDS.has(commandName)) {
+  if (command.prefixOnly === false) {
     return { blocked: true, reason: 'This command is only available as a slash command.' };
   }
 
