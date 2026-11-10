@@ -1,9 +1,9 @@
-import { SlashCommandBuilder, MessageFlags } from 'discord.js';
+import { SlashCommandBuilder } from 'discord.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 import { buildQueueReply } from '../../services/music/musicActions.js';
+import { deferMusicCommand } from '../../services/music/prefixSupport.js';
 
 export default {
-    slashOnly: true,
     category: 'Music',
     data: new SlashCommandBuilder()
         .setName('queue')
@@ -13,7 +13,7 @@ export default {
         ),
 
     async execute(interaction, config, client) {
-        await InteractionHelper.safeDefer(interaction, { flags: MessageFlags.Ephemeral });
+        await deferMusicCommand(interaction);
         const page = (interaction.options.getInteger('page') || 1) - 1;
         const payload = buildQueueReply(client, interaction.guild.id, page);
         await InteractionHelper.safeEditReply(interaction, {

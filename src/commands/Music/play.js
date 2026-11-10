@@ -1,9 +1,8 @@
-import { SlashCommandBuilder, MessageFlags } from 'discord.js';
-import { InteractionHelper } from '../../utils/interactionHelper.js';
+import { SlashCommandBuilder } from 'discord.js';
 import { playQuery, replyMusicSuccess } from '../../services/music/musicActions.js';
+import { deferMusicCommand } from '../../services/music/prefixSupport.js';
 
 export default {
-    slashOnly: true,
     category: 'Music',
     data: new SlashCommandBuilder()
         .setName('play')
@@ -12,8 +11,15 @@ export default {
             opt.setName('query').setDescription('Song name or URL').setRequired(true),
         ),
 
+    async prefixExecute(interaction, config, client) {
+        const query = (interaction.options._positional || []).join(' ').trim();
+        await deferMusicCommand(interaction);
+        const result = await playQuery(client, interaction, query);
+        await replyMusicSuccess(interaction, result.embed);
+    },
+
     async execute(interaction, config, client) {
-        const deferred = await InteractionHelper.safeDefer(interaction, { flags: MessageFlags.Ephemeral });
+        const deferred = await deferMusicCommand(interaction);
         if (!deferred) {
             return;
         }
