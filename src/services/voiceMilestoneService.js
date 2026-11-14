@@ -6,12 +6,14 @@
 // milestone role is removed, so a member always holds at most one voice tier.
 
 import { logger } from '../utils/logger.js';
+import { getColor } from '../config/bot.js';
 import { AttachmentBuilder, EmbedBuilder } from 'discord.js';
 import { renderVoiceMilestoneCard } from './voiceMilestoneCard.js';
 import {
   getVoiceMilestoneConfigKey,
   getVoiceMilestoneUserKey,
   getVoiceMilestoneUsersPrefix,
+  getVoiceMilestonePanelKey,
 } from '../utils/database/keys.js';
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -165,6 +167,13 @@ export function getMilestoneProgress(totalMs, milestones) {
   }
 
   return { current, next, sorted };
+}
+
+/** Milliseconds accumulated in the current, not-yet-committed voice session. */
+export function getActiveSessionMs(guildId, userId) {
+  const startedAt = activeSessions.get(sessionKey(guildId, userId));
+  if (startedAt == null) return 0;
+  return Math.max(0, Date.now() - startedAt);
 }
 
 /** Compute this member's global rank (1 = highest total voice) within the guild. */
@@ -495,6 +504,174 @@ export async function recheckAllMembers(client, guildId) {
   return { checked };
 }
 
+/**
+ * Every tracked member in the guild, ranked by total voice time. Current,
+ * not-yet-committed sessions are included so the ranking stays live.
+ */
+export async function getVoiceMilestoneLeaderboard(client, guildId) {
+  if (!client?.db) return [];
+
+  try {
+    const prefix = getVoiceMilestoneUsersPrefix(guildId);
+    const keys = await client.db.list(prefix);
+    const entries = [];
+
+    for (const key of keys) {
+      const userId = key.slice(prefix.length);
+      if (!userId) continue;
+
+      const raw = await client.db.get(key, null);
+      const storedMs = Math.max(0, Math.floor(Number(raw?.totalMs) || 0));
+      const totalMs = storedMs + getActiveSessionMs(guildId, userId);
+      if (totalMs <= 0) continue;
+
+      entries.push({ userId, totalMs });
+    }
+
+    entries.sort((a, b) => b.totalMs - a.totalMs || a.userId.localeCompare(b.userId));
+    return entries;
+  } catch (error) {
+    logger.error(`Failed to build voice milestone leaderboard for guild ${guildId}:`, error);
+    return [];
+  }
+}
+
+const LEADERBOARD_SIZE = 10;
+
+/** Embed listing the top members by voice time, optionally highlighting a viewer. */
+export async function buildVoiceLeaderboardEmbed(client, guild, { viewerId = null } = {}) {
+  const config = await getVoiceMilestoneConfig(client, guild.id);
+  const entries = await getVoiceMilestoneLeaderboard(client, guild.id);
+  const top = entries.slice(0, LEADERBOARD_SIZE);
+
+  const lines = top.map((entry, index) =>
+    `**#${index + 1}** <@${entry.userId}> — ${formatVoiceDuration(entry.totalMs)}`);
+
+  if (lines.length === 0) {
+    lines.push('Belum ada data voice yang tercatat.');
+  }
+
+  const embed = new EmbedBuilder()
+    .setColor(config.enabled ? getColor('success') : getColor('warning'))
+    .setTitle('Voice Leaderboard');
+
+  let viewerField = null;
+  if (viewerId) {
+    const index = entries.findIndex((entry) => entry.userId === String(viewerId));
+    if (index >= 0) {
+      const entry = entries[index];
+      viewerField = { name: 'Rank Kamu', value: `#${index + 1} · ${formatVoiceDuration(entry.totalMs)}`, inline: true };
+    } else {
+      lines.push('', 'Rank kamu belum tercatat — mulai masuk voice channel dulu.');
+    }
+  }
+
+  const updatedAt = Math.floor(Date.now() / 1000);
+  lines.push('', `Live · diperbarui otomatis · <t:${updatedAt}:R>`);
+  embed.setDescription(lines.join('\n'));
+
+  if (viewerField) {
+    embed.addFields(viewerField);
+  }
+  embed.addFields({ name: 'Member Terlacak', value: String(entries.length), inline: true });
+
+  return embed;
+}
+
+export async function getVoiceMilestonePanel(client, guildId) {
+  const empty = { channelId: null, messageId: null };
+  if (!client?.db) return empty;
+
+  try {
+    const raw = await client.db.get(getVoiceMilestonePanelKey(guildId), null);
+    const data = raw && typeof raw === 'object' ? raw : {};
+    return {
+      channelId: data.channelId ? String(data.channelId) : null,
+      messageId: data.messageId ? String(data.messageId) : null,
+    };
+  } catch (error) {
+    logger.error(`Failed to read voice milestone panel for guild ${guildId}:`, error);
+    return empty;
+  }
+}
+
+export async function clearVoiceMilestonePanel(client, guildId) {
+  try {
+    await client.db.delete(getVoiceMilestonePanelKey(guildId));
+  } catch (error) {
+    logger.warn(`Failed to clear voice milestone panel for guild ${guildId}:`, error);
+  }
+}
+
+/** Post a live leaderboard panel to a channel and remember it for auto-refresh. */
+export async function postVoiceLeaderboardPanel(client, guild, channelId) {
+  const existing = await getVoiceMilestonePanel(client, guild.id);
+  const channel = guild.channels.cache.get(channelId)
+    || await guild.channels.fetch(channelId).catch(() => null);
+
+  if (!channel?.isTextBased?.() || typeof channel.send !== 'function') {
+    return { ok: false, reason: 'channel_unavailable' };
+  }
+
+  let message;
+  try {
+    message = await channel.send({ embeds: [await buildVoiceLeaderboardEmbed(client, guild)] });
+  } catch (error) {
+    logger.warn(`Failed to post voice leaderboard panel in guild ${guild.id}:`, error);
+    return { ok: false, reason: 'send_failed' };
+  }
+
+  // Remove the previous panel if it lived somewhere else.
+  if (existing.channelId && existing.messageId
+    && (existing.channelId !== channel.id || existing.messageId !== message.id)) {
+    const oldChannel = guild.channels.cache.get(existing.channelId)
+      || await guild.channels.fetch(existing.channelId).catch(() => null);
+    const oldMessage = await oldChannel?.messages?.fetch(existing.messageId).catch(() => null);
+    if (oldMessage) await oldMessage.delete().catch(() => {});
+  }
+
+  await client.db.set(getVoiceMilestonePanelKey(guild.id), {
+    channelId: channel.id,
+    messageId: message.id,
+  });
+
+  return { ok: true, channelId: channel.id, messageId: message.id };
+}
+
+/** Refresh every stored live leaderboard panel. Panels whose message was deleted are dropped. */
+export async function refreshVoiceLeaderboardPanels(client) {
+  if (!client?.db) return { refreshed: 0 };
+
+  let refreshed = 0;
+  for (const guild of client.guilds?.cache?.values?.() ?? []) {
+    const panel = await getVoiceMilestonePanel(client, guild.id);
+    if (!panel.channelId || !panel.messageId) continue;
+
+    try {
+      const channel = guild.channels.cache.get(panel.channelId)
+        || await guild.channels.fetch(panel.channelId).catch(() => null);
+      if (!channel?.isTextBased?.()) {
+        await clearVoiceMilestonePanel(client, guild.id);
+        continue;
+      }
+
+      const message = await channel.messages.fetch(panel.messageId).catch(() => null);
+      if (!message) {
+        // Message was deleted manually — stop tracking it.
+        await clearVoiceMilestonePanel(client, guild.id);
+        continue;
+      }
+
+      await message.edit({ embeds: [await buildVoiceLeaderboardEmbed(client, guild)] });
+      refreshed += 1;
+    } catch (error) {
+      logger.warn(`Failed to refresh voice leaderboard panel for guild ${guild.id}:`, error);
+    }
+  }
+
+  return { refreshed };
+}
+
 export default {
   VOICE_MILESTONE_PRESET,
   normalizeMilestones,
@@ -512,4 +689,11 @@ export default {
   flushVoiceSessions,
   applyMilestonesForMember,
   recheckAllMembers,
+  getActiveSessionMs,
+  getVoiceMilestoneLeaderboard,
+  buildVoiceLeaderboardEmbed,
+  getVoiceMilestonePanel,
+  clearVoiceMilestonePanel,
+  postVoiceLeaderboardPanel,
+  refreshVoiceLeaderboardPanels,
 };

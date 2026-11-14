@@ -116,6 +116,10 @@ export function getVoiceMilestoneUsersPrefix(guildId) {
     return `guild:${guildId}:voicemilestone:users:`;
 }
 
+export function getVoiceMilestonePanelKey(guildId) {
+    return `guild:${guildId}:voicemilestone:panel`;
+}
+
 export function getGiveawayEntryKey(userId, giveawayId) {
     return `giveaway:${userId}:${giveawayId}`;
 }

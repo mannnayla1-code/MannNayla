@@ -44,6 +44,7 @@ export {
     getVoiceMilestoneConfigKey,
     getVoiceMilestoneUserKey,
     getVoiceMilestoneUsersPrefix,
+    getVoiceMilestonePanelKey,
     getGiveawayEntryKey,
     getGiveawayLockKey,
     canonicalizeKey,

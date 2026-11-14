@@ -14,6 +14,8 @@ import {
     applyMilestonesForMember,
     recheckAllMembers,
     sendVoiceMilestoneTestAnnouncement,
+    buildVoiceLeaderboardEmbed,
+    postVoiceLeaderboardPanel,
 } from '../../services/voiceMilestoneService.js';
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -272,6 +274,42 @@ async function handleProgress(interaction, client) {
     await replyEmbed(interaction, embed);
 }
 
+async function handleLeaderboard(interaction, client) {
+    const guild = interaction.guild;
+    const channel = interaction.options.getChannel('channel');
+
+    if (channel) {
+        if (!canManage(interaction.member)) {
+            await replyUserError(interaction, {
+                type: ErrorTypes.PERMISSION,
+                message: 'You need **Manage Server** permission to post the live leaderboard panel.',
+            });
+            return;
+        }
+
+        const result = await postVoiceLeaderboardPanel(client, guild, channel.id);
+        if (!result.ok) {
+            await replyUserError(interaction, {
+                type: ErrorTypes.CONFIGURATION,
+                message: 'Could not post the panel. Check that I can View Channel, Send Messages and Embed Links there.',
+            });
+            return;
+        }
+
+        const embed = baseEmbed('Live Leaderboard Panel', { enabled: true })
+            .setDescription(
+                `Live voice leaderboard posted in <#${result.channelId}>.\n` +
+                'It refreshes automatically, so members never need to run a command.\n' +
+                'Delete that message to stop the auto-updates.',
+            );
+        await replyEmbed(interaction, embed);
+        return;
+    }
+
+    const embed = await buildVoiceLeaderboardEmbed(client, guild, { viewerId: interaction.user.id });
+    await replyEmbed(interaction, embed);
+}
+
 async function handleRecheck(interaction, client) {
     const guild = interaction.guild;
     const targetUser = interaction.options.getUser('user');
@@ -402,6 +440,16 @@ export default {
                         .setRequired(false)))
         .addSubcommand((subcommand) =>
             subcommand
+                .setName('leaderboard')
+                .setDescription('View the live voice-time leaderboard, or post an auto-updating panel')
+                .addChannelOption((option) =>
+                    option
+                        .setName('channel')
+                        .setDescription('Post an auto-updating panel here (Manage Server required); leave empty to just view')
+                        .addChannelTypes(ChannelType.GuildText)
+                        .setRequired(false)))
+        .addSubcommand((subcommand) =>
+            subcommand
                 .setName('recheck')
                 .setDescription('Re-apply milestone roles based on recorded time')
                 .addUserOption((option) =>
@@ -422,7 +470,7 @@ export default {
     async execute(interaction, guildConfig, client) {
         const subcommand = interaction.options.getSubcommand();
 
-        if (subcommand !== 'progress' && !canManage(interaction.member)) {
+        if (!['progress', 'leaderboard'].includes(subcommand) && !canManage(interaction.member)) {
             await replyUserError(interaction, {
                 type: ErrorTypes.PERMISSION,
                 message: 'You need **Manage Server** permission to configure voice milestones.',
@@ -457,6 +505,9 @@ export default {
                     break;
                 case 'progress':
                     await handleProgress(interaction, client);
+                    break;
+                case 'leaderboard':
+                    await handleLeaderboard(interaction, client);
                     break;
                 case 'recheck':
                     await handleRecheck(interaction, client);
