@@ -571,6 +571,10 @@ export async function buildVoiceLeaderboardEmbed(client, guild, { viewerId = nul
 
   if (entries.length === 0) {
     embed.setDescription('Belum ada data voice yang tercatat.');
+  } else {
+    const podium = members.slice(0, 3).map((m, i) =>
+      `**#${i + 1}** <@${m.userId}> — ${formatVoiceDuration(m.totalMs)}`);
+    embed.setDescription(podium.join('\n'));
   }
 
   if (viewer) {
