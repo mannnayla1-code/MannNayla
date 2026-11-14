@@ -252,7 +252,7 @@ class TitanBot extends Client {
     cron.schedule('* * * * *', runSafeTask('giveaway_check', () => checkGiveaways(this)));
     cron.schedule('*/15 * * * *', runSafeTask('counter_update', () => this.updateAllCounters()));
     cron.schedule('*/10 * * * *', runSafeTask('voice_milestone_flush', () => flushVoiceSessions(this)));
-    cron.schedule('*/5 * * * *', runSafeTask('voice_leaderboard_refresh', () => refreshVoiceLeaderboardPanels(this)));
+    cron.schedule('* * * * *', runSafeTask('voice_leaderboard_refresh', () => refreshVoiceLeaderboardPanels(this)));
   }
 
   async updateAllCounters() {

@@ -306,8 +306,8 @@ async function handleLeaderboard(interaction, client) {
         return;
     }
 
-    const embed = await buildVoiceLeaderboardEmbed(client, guild, { viewerId: interaction.user.id });
-    await replyEmbed(interaction, embed);
+    const payload = await buildVoiceLeaderboardEmbed(client, guild, { viewerId: interaction.user.id });
+    await InteractionHelper.safeEditReply(interaction, payload);
 }
 
 async function handleRecheck(interaction, client) {

@@ -8,7 +8,7 @@
 import { logger } from '../utils/logger.js';
 import { getColor } from '../config/bot.js';
 import { AttachmentBuilder, EmbedBuilder } from 'discord.js';
-import { renderVoiceMilestoneCard } from './voiceMilestoneCard.js';
+import { renderVoiceMilestoneCard, renderVoiceLeaderboardCard } from './voiceMilestoneCard.js';
 import {
   getVoiceMilestoneConfigKey,
   getVoiceMilestoneUserKey,
@@ -538,44 +538,71 @@ export async function getVoiceMilestoneLeaderboard(client, guildId) {
 
 const LEADERBOARD_SIZE = 10;
 
-/** Embed listing the top members by voice time, optionally highlighting a viewer. */
+/** Payload (embeds + image attachment) for the live voice leaderboard. */
 export async function buildVoiceLeaderboardEmbed(client, guild, { viewerId = null } = {}) {
   const config = await getVoiceMilestoneConfig(client, guild.id);
   const entries = await getVoiceMilestoneLeaderboard(client, guild.id);
   const top = entries.slice(0, LEADERBOARD_SIZE);
 
-  const lines = top.map((entry, index) =>
-    `**#${index + 1}** <@${entry.userId}> — ${formatVoiceDuration(entry.totalMs)}`);
+  // Resolve member display names + avatar URLs for the rendered card.
+  const members = [];
+  for (const entry of top) {
+    let member = guild.members.cache.get(entry.userId);
+    if (!member) member = await guild.members.fetch(entry.userId).catch(() => null);
+    members.push({
+      userId: entry.userId,
+      totalMs: entry.totalMs,
+      displayName: member?.displayName || member?.user?.username || entry.userId,
+      avatarURL: member?.user?.displayAvatarURL?.({ extension: 'png', size: 256 }) || null,
+    });
+  }
 
-  if (lines.length === 0) {
-    lines.push('Belum ada data voice yang tercatat.');
+  let viewer = null;
+  if (viewerId) {
+    const index = entries.findIndex((entry) => entry.userId === String(viewerId));
+    if (index >= 0) {
+      viewer = { rank: index + 1, totalMs: entries[index].totalMs };
+    }
   }
 
   const embed = new EmbedBuilder()
     .setColor(config.enabled ? getColor('success') : getColor('warning'))
     .setTitle('Voice Leaderboard');
 
-  let viewerField = null;
-  if (viewerId) {
-    const index = entries.findIndex((entry) => entry.userId === String(viewerId));
-    if (index >= 0) {
-      const entry = entries[index];
-      viewerField = { name: 'Rank Kamu', value: `#${index + 1} · ${formatVoiceDuration(entry.totalMs)}`, inline: true };
-    } else {
-      lines.push('', 'Rank kamu belum tercatat — mulai masuk voice channel dulu.');
-    }
+  if (entries.length === 0) {
+    embed.setDescription('Belum ada data voice yang tercatat.');
   }
 
-  const updatedAt = Math.floor(Date.now() / 1000);
-  lines.push('', `Live · diperbarui otomatis · <t:${updatedAt}:R>`);
-  embed.setDescription(lines.join('\n'));
-
-  if (viewerField) {
-    embed.addFields(viewerField);
+  if (viewer) {
+    embed.addFields({
+      name: 'Rank Kamu',
+      value: `#${viewer.rank} · ${formatVoiceDuration(viewer.totalMs)}`,
+      inline: true,
+    });
   }
   embed.addFields({ name: 'Member Terlacak', value: String(entries.length), inline: true });
 
-  return embed;
+  let cardBuffer = null;
+  try {
+    cardBuffer = await renderVoiceLeaderboardCard({
+      members,
+      viewer,
+      memberCount: entries.length,
+      configEnabled: config.enabled,
+    });
+  } catch (error) {
+    logger.warn(`Failed to render voice leaderboard card for guild ${guild.id}:`, error);
+  }
+
+  if (cardBuffer) {
+    embed.setImage('attachment://voice-leaderboard.png');
+  }
+
+  const payload = { embeds: [embed] };
+  if (cardBuffer) {
+    payload.files = [new AttachmentBuilder(cardBuffer, { name: 'voice-leaderboard.png' })];
+  }
+  return payload;
 }
 
 export async function getVoiceMilestonePanel(client, guildId) {
@@ -615,7 +642,7 @@ export async function postVoiceLeaderboardPanel(client, guild, channelId) {
 
   let message;
   try {
-    message = await channel.send({ embeds: [await buildVoiceLeaderboardEmbed(client, guild)] });
+    message = await channel.send(await buildVoiceLeaderboardEmbed(client, guild));
   } catch (error) {
     logger.warn(`Failed to post voice leaderboard panel in guild ${guild.id}:`, error);
     return { ok: false, reason: 'send_failed' };
@@ -662,7 +689,7 @@ export async function refreshVoiceLeaderboardPanels(client) {
         continue;
       }
 
-      await message.edit({ embeds: [await buildVoiceLeaderboardEmbed(client, guild)] });
+      await message.edit(await buildVoiceLeaderboardEmbed(client, guild));
       refreshed += 1;
     } catch (error) {
       logger.warn(`Failed to refresh voice leaderboard panel for guild ${guild.id}:`, error);

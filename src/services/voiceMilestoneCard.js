@@ -255,3 +255,176 @@ export async function renderVoiceMilestoneCard({
 
   return canvas.toBuffer('image/png');
 }
+
+const RANK_COLORS = ['#F5C542', '#C0C7CC', '#CD7F32'];
+
+async function loadAvatarImage(avatarUrl) {
+  if (!avatarUrl) return null;
+  try {
+    const response = await fetch(avatarUrl);
+    if (!response.ok) return null;
+    return await loadImage(Buffer.from(await response.arrayBuffer()));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Render a vertical leaderboard card: top members with their avatars, rank
+ * medals and accumulated voice time.
+ */
+export async function renderVoiceLeaderboardCard({
+  members,
+  viewer = null,
+  memberCount = 0,
+  configEnabled = true,
+}) {
+  ensureFonts();
+
+  const width = 1100;
+  const headerHeight = 150;
+  const entryHeight = 92;
+  const footerHeight = 110;
+  const height = headerHeight + members.length * entryHeight + footerHeight;
+
+  const canvas = createCanvas(width, height);
+  const context = canvas.getContext('2d');
+
+  // Background
+  const background = await getBackground();
+  const scale = Math.max(width / background.width, height / background.height);
+  const bw = background.width * scale;
+  const bh = background.height * scale;
+  context.drawImage(background, (width - bw) / 2, (height - bh) / 2, bw, bh);
+  context.fillStyle = 'rgba(8, 12, 14, 0.82)';
+  context.fillRect(0, 0, width, height);
+
+  // Card frame
+  roundedRect(context, 30, 24, width - 60, height - 48, 32);
+  context.fillStyle = 'rgba(14, 20, 22, 0.55)';
+  context.fill();
+  context.lineWidth = 2;
+  context.strokeStyle = configEnabled ? 'rgba(214, 177, 94, 0.72)' : 'rgba(170, 179, 182, 0.6)';
+  context.stroke();
+
+  // Header
+  context.fillStyle = '#D6B15E';
+  context.font = fontString(18);
+  context.letterSpacing = '5px';
+  context.fillText('MANAY SOCIETY', 70, 78);
+  context.letterSpacing = '0px';
+
+  context.fillStyle = '#F5F6F6';
+  context.font = fontString(42);
+  context.fillText('Top Voice Leaderboard', 70, 128);
+
+  // LIVE pill
+  const liveText = 'LIVE';
+  context.font = fontString(16);
+  const liveWidth = context.measureText(liveText).width;
+  const liveX = width - 70 - liveWidth - 28;
+  const liveY = 104;
+  roundedRect(context, liveX, liveY, liveWidth + 28, 30, 15);
+  context.fillStyle = '#E04B4B';
+  context.fill();
+  context.fillStyle = '#FFFFFF';
+  context.textAlign = 'center';
+  context.fillText(liveText, liveX + (liveWidth + 28) / 2, liveY + 21);
+  context.textAlign = 'start';
+
+  context.fillStyle = '#AAB3B6';
+  context.font = fontString(18);
+  context.textAlign = 'right';
+  context.fillText(`${memberCount} member terlacak`, width - 70, 78);
+  context.textAlign = 'start';
+
+  // Entries
+  for (let i = 0; i < members.length; i += 1) {
+    const m = members[i];
+    const y = headerHeight + i * entryHeight + 20;
+    const isTop3 = i < 3;
+    const accent = isTop3 ? RANK_COLORS[i] : '#5A6468';
+
+    // Rank badge
+    const badgeX = 80;
+    const badgeY = y + 32;
+    context.beginPath();
+    context.arc(badgeX, badgeY, 24, 0, Math.PI * 2);
+    context.fillStyle = accent;
+    context.fill();
+    context.fillStyle = '#0C1113';
+    context.font = fontString(20);
+    context.textAlign = 'center';
+    context.fillText(`${i + 1}`, badgeX, badgeY + 7);
+    context.textAlign = 'start';
+
+    // Avatar
+    const avatarX = 150;
+    const avatarY = y + 32;
+    const avatarRadius = 34;
+    context.beginPath();
+    context.arc(avatarX, avatarY, avatarRadius + 4, 0, Math.PI * 2);
+    context.fillStyle = 'rgba(8, 12, 14, 0.9)';
+    context.fill();
+    context.lineWidth = 3;
+    context.strokeStyle = accent;
+    context.stroke();
+
+    const avatar = await loadAvatarImage(m.avatarURL);
+    context.save();
+    context.beginPath();
+    context.arc(avatarX, avatarY, avatarRadius, 0, Math.PI * 2);
+    context.clip();
+    if (avatar) {
+      context.drawImage(avatar, avatarX - avatarRadius, avatarY - avatarRadius, avatarRadius * 2, avatarRadius * 2);
+    } else {
+      context.fillStyle = '#33413D';
+      context.fillRect(avatarX - avatarRadius, avatarY - avatarRadius, avatarRadius * 2, avatarRadius * 2);
+      context.fillStyle = '#F5F5F5';
+      context.font = fontString(28);
+      context.textAlign = 'center';
+      context.fillText((m.displayName || '?').slice(0, 1).toUpperCase(), avatarX, avatarY + 10);
+      context.textAlign = 'start';
+    }
+    context.restore();
+
+    // Name
+    context.fillStyle = '#F5F6F6';
+    fitText(context, m.displayName || 'Unknown', 210, y + 42, 560, 28, 18);
+
+    // Duration (right)
+    context.fillStyle = isTop3 ? accent : '#D8DEDF';
+    context.font = fontString(28);
+    context.textAlign = 'right';
+    context.fillText(formatHours(m.totalMs), width - 70, y + 42);
+    context.textAlign = 'start';
+
+    // Divider
+    if (i < members.length - 1) {
+      context.fillStyle = 'rgba(255, 255, 255, 0.06)';
+      context.fillRect(70, y + entryHeight - 8, width - 140, 1);
+    }
+  }
+
+  // Footer: viewer rank + live marker
+  const footerY = headerHeight + members.length * entryHeight + 40;
+  if (viewer) {
+    context.fillStyle = '#AAB3B6';
+    context.font = fontString(18);
+    context.fillText('RANK KAMU', 70, footerY);
+    context.fillStyle = '#F5F6F6';
+    context.font = fontString(32);
+    context.fillText(`#${viewer.rank}`, 70, footerY + 40);
+    context.fillStyle = '#D6B15E';
+    context.font = fontString(24);
+    context.fillText(formatHours(viewer.totalMs), 180, footerY + 40);
+  }
+
+  context.fillStyle = '#AAB3B6';
+  context.font = fontString(18);
+  context.textAlign = 'right';
+  context.fillText('LIVE  ·  update tiap 1 menit', width - 70, footerY + 40);
+  context.textAlign = 'start';
+
+  return canvas.toBuffer('image/png');
+}
