@@ -4,6 +4,7 @@ import config from "../config/application.js";
 import { reconcileReactionRoleMessages } from "../services/reactionRoleService.js";
 import { reconcileTicketPanels, reconcileVerificationPanels, reconcileReactionRolePanelHealth } from "../services/panelHealthService.js";
 import { startLiveStatusUpdater } from "../services/musicStatusService.js";
+import { startLeaderboardUpdater } from "../services/voiceMilestoneService.js";
 
 export default {
   name: Events.ClientReady,
@@ -39,6 +40,9 @@ export default {
 
       // Mulai auto-refresh untuk live status bot musik
       startLiveStatusUpdater(client);
+
+      // Mulai auto-refresh untuk voice milestone leaderboard
+      startLeaderboardUpdater(client);
 
     } catch (error) {
       logger.error("Error in ready event:", error);

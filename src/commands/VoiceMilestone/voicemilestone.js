@@ -14,6 +14,9 @@ import {
     applyMilestonesForMember,
     recheckAllMembers,
     sendVoiceMilestoneTestAnnouncement,
+    buildLeaderboardPayload,
+    setLeaderboardMessage,
+    clearLeaderboardMessage,
 } from '../../services/voiceMilestoneService.js';
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -310,6 +313,63 @@ async function handleReset(interaction, client) {
     await replyEmbed(interaction, embed);
 }
 
+async function handleLeaderboardView(interaction, client) {
+    const payload = await buildLeaderboardPayload(client, interaction.guild);
+    await InteractionHelper.safeEditReply(interaction, payload);
+}
+
+async function handleLeaderboardStart(interaction, client) {
+    const guild = interaction.guild;
+    const config = await getVoiceMilestoneConfig(client, guild.id);
+
+    if (config.leaderboard.channelId && config.leaderboard.messageId) {
+        await replyUserError(interaction, {
+            type: ErrorTypes.CONFIGURATION,
+            message: 'A live leaderboard is already active. Run `/voicemilestone leaderboard stop` first.',
+        });
+        return;
+    }
+
+    const payload = await buildLeaderboardPayload(client, guild);
+    const liveMessage = await interaction.channel.send(payload);
+    await setLeaderboardMessage(client, guild.id, interaction.channelId, liveMessage.id);
+
+    const embed = baseEmbed('Voice Leaderboard Live', { enabled: true })
+        .setDescription(
+            `Live leaderboard posted in ${interaction.channel}. It auto-updates every 5 minutes.`,
+        );
+    await replyEmbed(interaction, embed);
+}
+
+async function handleLeaderboardStop(interaction, client) {
+    const guild = interaction.guild;
+    const config = await getVoiceMilestoneConfig(client, guild.id);
+
+    if (!config.leaderboard.channelId || !config.leaderboard.messageId) {
+        await replyUserError(interaction, {
+            type: ErrorTypes.CONFIGURATION,
+            message: 'No live leaderboard is active. Run `/voicemilestone leaderboard start` first.',
+        });
+        return;
+    }
+
+    try {
+        const channel = guild.channels.cache.get(config.leaderboard.channelId);
+        if (channel) {
+            const msg = await channel.messages.fetch(config.leaderboard.messageId).catch(() => null);
+            if (msg) await msg.delete().catch(() => {});
+        }
+    } catch {
+        // ignore — message may already be gone
+    }
+
+    await clearLeaderboardMessage(client, guild.id);
+
+    const embed = baseEmbed('Voice Leaderboard Stopped', { enabled: true })
+        .setDescription('Live leaderboard auto-update has been stopped.');
+    await replyEmbed(interaction, embed);
+}
+
 export default {
     data: new SlashCommandBuilder()
         .setName('voicemilestone')
@@ -417,12 +477,31 @@ export default {
                     option
                         .setName('user')
                         .setDescription('The member whose voice time should be reset')
-                        .setRequired(true))),
+                        .setRequired(true)))
+        .addSubcommandGroup((group) =>
+            group
+                .setName('leaderboard')
+                .setDescription('View or manage the live voice milestone leaderboard')
+                .addSubcommand((subcommand) =>
+                    subcommand
+                        .setName('view')
+                        .setDescription('Show the current top voice members (one-time)'))
+                .addSubcommand((subcommand) =>
+                    subcommand
+                        .setName('start')
+                        .setDescription('Post a leaderboard that auto-updates every 5 minutes in this channel'))
+                .addSubcommand((subcommand) =>
+                    subcommand
+                        .setName('stop')
+                        .setDescription('Stop the live leaderboard auto-update'))),
 
     async execute(interaction, guildConfig, client) {
         const subcommand = interaction.options.getSubcommand();
+        const subcommandGroup = interaction.options.getSubcommandGroup();
 
-        if (subcommand !== 'progress' && !canManage(interaction.member)) {
+        const isLeaderboardView = subcommandGroup === 'leaderboard' && subcommand === 'view';
+
+        if (subcommand !== 'progress' && !isLeaderboardView && !canManage(interaction.member)) {
             await replyUserError(interaction, {
                 type: ErrorTypes.PERMISSION,
                 message: 'You need **Manage Server** permission to configure voice milestones.',
@@ -433,6 +512,17 @@ export default {
         await InteractionHelper.safeDefer(interaction);
 
         try {
+            if (subcommandGroup === 'leaderboard') {
+                if (subcommand === 'view') {
+                    await handleLeaderboardView(interaction, client);
+                } else if (subcommand === 'start') {
+                    await handleLeaderboardStart(interaction, client);
+                } else if (subcommand === 'stop') {
+                    await handleLeaderboardStop(interaction, client);
+                }
+                return;
+            }
+
             switch (subcommand) {
                 case 'setup':
                     await handleSetup(interaction, client);

@@ -8,6 +8,7 @@
 import { logger } from '../utils/logger.js';
 import { AttachmentBuilder, EmbedBuilder } from 'discord.js';
 import { renderVoiceMilestoneCard } from './voiceMilestoneCard.js';
+import { renderVoiceLeaderboardCard } from './voiceMilestoneLeaderboardCard.js';
 import {
   getVoiceMilestoneConfigKey,
   getVoiceMilestoneUserKey,
@@ -86,9 +87,17 @@ export function normalizeMilestones(list) {
     .slice(0, MAX_MILESTONES);
 }
 
+function normalizeLeaderboard(raw) {
+  const lb = raw && typeof raw === 'object' ? raw : {};
+  return {
+    channelId: lb.channelId ? String(lb.channelId) : null,
+    messageId: lb.messageId ? String(lb.messageId) : null,
+  };
+}
+
 export async function getVoiceMilestoneConfig(client, guildId) {
   if (!client?.db) {
-    return { enabled: false, announcementChannelId: null, milestones: [] };
+    return { enabled: false, announcementChannelId: null, milestones: [], leaderboard: { channelId: null, messageId: null } };
   }
 
   try {
@@ -98,10 +107,11 @@ export async function getVoiceMilestoneConfig(client, guildId) {
       enabled: base.enabled === true,
       announcementChannelId: base.announcementChannelId ? String(base.announcementChannelId) : null,
       milestones: normalizeMilestones(base.milestones),
+      leaderboard: normalizeLeaderboard(base.leaderboard),
     };
   } catch (error) {
     logger.error(`Error reading voice milestone config for guild ${guildId}:`, error);
-    return { enabled: false, announcementChannelId: null, milestones: [] };
+    return { enabled: false, announcementChannelId: null, milestones: [], leaderboard: { channelId: null, messageId: null } };
   }
 }
 
@@ -110,6 +120,7 @@ export async function saveVoiceMilestoneConfig(client, guildId, config) {
     enabled: config?.enabled === true,
     announcementChannelId: config?.announcementChannelId ? String(config.announcementChannelId) : null,
     milestones: normalizeMilestones(config?.milestones),
+    leaderboard: normalizeLeaderboard(config?.leaderboard),
   };
 
   await client.db.set(getVoiceMilestoneConfigKey(guildId), normalized);
@@ -495,6 +506,148 @@ export async function recheckAllMembers(client, guildId) {
   return { checked };
 }
 
+/* ============================================================
+ * Live Leaderboard
+ * ============================================================ */
+
+const LEADERBOARD_TOP_N = 10;
+const LEADERBOARD_REFRESH_INTERVAL_MS = 5 * 60 * 1000; // 5 menit
+
+/**
+ * Ambil top member berdasarkan total voice time, lengkap dengan data member
+ * (display name, avatar) dan tier yang sedang dipegang.
+ */
+export async function getVoiceLeaderboard(client, guild, topN = LEADERBOARD_TOP_N) {
+  const config = await getVoiceMilestoneConfig(client, guild.id);
+  const prefix = getVoiceMilestoneUsersPrefix(guild.id);
+  const keys = await client.db.list(prefix);
+
+  const entries = [];
+  for (const key of keys) {
+    const userId = key.slice(prefix.length);
+    if (!userId) continue;
+    const raw = await client.db.get(key, null);
+    const totalMs = Math.max(0, Math.floor(Number(raw?.totalMs) || 0));
+    if (totalMs <= 0) continue;
+    entries.push({ userId, totalMs });
+  }
+
+  entries.sort((a, b) => b.totalMs - a.totalMs);
+
+  const top = entries.slice(0, topN);
+  const enriched = [];
+
+  for (const entry of top) {
+    let member = guild.members.cache.get(entry.userId);
+    if (!member) {
+      member = await guild.members.fetch(entry.userId).catch(() => null);
+    }
+
+    const { current } = getMilestoneProgress(entry.totalMs, config.milestones);
+    const role = current?.roleId ? guild.roles.cache.get(current.roleId) : null;
+
+    enriched.push({
+      userId: entry.userId,
+      totalMs: entry.totalMs,
+      displayName: member?.displayName || member?.user?.globalName || member?.user?.username || 'Unknown',
+      avatarURL: member?.user?.displayAvatarURL?.({ extension: 'png', size: 128 }) || null,
+      color: role?.color ?? null,
+      tierLabel: current?.label || null,
+      tierHours: current?.hours ?? null,
+    });
+  }
+
+  return { entries: enriched, totalTracked: entries.length, config };
+}
+
+export async function setLeaderboardMessage(client, guildId, channelId, messageId) {
+  const config = await getVoiceMilestoneConfig(client, guildId);
+  return saveVoiceMilestoneConfig(client, guildId, {
+    ...config,
+    leaderboard: { channelId: String(channelId), messageId: String(messageId) },
+  });
+}
+
+export async function clearLeaderboardMessage(client, guildId) {
+  const config = await getVoiceMilestoneConfig(client, guildId);
+  return saveVoiceMilestoneConfig(client, guildId, {
+    ...config,
+    leaderboard: { channelId: null, messageId: null },
+  });
+}
+
+/**
+ * Build payload (embeds + files) untuk pesan leaderboard.
+ * Dipakai saat pertama kali kirim dan saat auto-refresh.
+ */
+export async function buildLeaderboardPayload(client, guild) {
+  const { entries, totalTracked } = await getVoiceLeaderboard(client, guild, LEADERBOARD_TOP_N);
+
+  let cardBuffer = null;
+  try {
+    cardBuffer = await renderVoiceLeaderboardCard({ guildName: guild.name, entries });
+  } catch (error) {
+    logger.warn(`Failed to render voice leaderboard card for guild ${guild.id}:`, error);
+  }
+
+  const lines = entries.length > 0
+    ? entries.map((e, i) => {
+        const medal = ['🥇', '🥈', '🥉'][i] || `**#${i + 1}**`;
+        const tier = e.tierLabel ? ` · ${e.tierLabel}` : '';
+        return `${medal} **${e.displayName}** — ⏱️ ${formatVoiceDuration(e.totalMs)}${tier}`;
+      }).join('\n')
+    : 'Belum ada data voice time. Ayo mulai ngobrol di voice channel!';
+
+  const updatedAt = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+
+  const embed = new EmbedBuilder()
+    .setTitle(`🏆 Voice Leaderboard — ${guild.name}`)
+    .setDescription(lines)
+    .setColor(0xD6B15E)
+    .setFooter({ text: `${totalTracked} member tercatat · diperbarui ${updatedAt} · update tiap 5 menit` });
+
+  if (cardBuffer) {
+    embed.setImage('attachment://voice-leaderboard.png');
+  }
+
+  const payload = { embeds: [embed], allowedMentions: { users: [] } };
+  if (cardBuffer) {
+    payload.files = [new AttachmentBuilder(cardBuffer, { name: 'voice-leaderboard.png' })];
+  }
+  return payload;
+}
+
+/**
+ * Mulai interval global yang me-refresh semua pesan leaderboard di semua guild.
+ * Satu interval per client (dijaga via client.voiceLeaderboardTimer).
+ */
+export function startLeaderboardUpdater(client) {
+  if (client.voiceLeaderboardTimer) return;
+
+  client.voiceLeaderboardTimer = setInterval(async () => {
+    for (const guild of client.guilds.cache.values()) {
+      try {
+        const config = await getVoiceMilestoneConfig(client, guild.id);
+        const { channelId, messageId } = config.leaderboard;
+        if (!channelId || !messageId) continue;
+
+        const channel = guild.channels.cache.get(channelId);
+        if (!channel) continue;
+
+        const message = await channel.messages.fetch(messageId).catch(() => null);
+        if (!message) continue;
+
+        const payload = await buildLeaderboardPayload(client, guild);
+        await message.edit(payload).catch(() => {});
+      } catch (error) {
+        logger.debug(`Voice leaderboard update failed for guild ${guild.id}:`, error);
+      }
+    }
+  }, LEADERBOARD_REFRESH_INTERVAL_MS);
+
+  logger.info(`Voice leaderboard updater started (interval ${LEADERBOARD_REFRESH_INTERVAL_MS / 60000}m)`);
+}
+
 export default {
   VOICE_MILESTONE_PRESET,
   normalizeMilestones,
@@ -512,4 +665,9 @@ export default {
   flushVoiceSessions,
   applyMilestonesForMember,
   recheckAllMembers,
+  getVoiceLeaderboard,
+  setLeaderboardMessage,
+  clearLeaderboardMessage,
+  buildLeaderboardPayload,
+  startLeaderboardUpdater,
 };
