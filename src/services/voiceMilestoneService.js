@@ -590,9 +590,10 @@ export async function buildLeaderboardPayload(client, guild) {
     logger.warn(`Failed to render voice leaderboard card for guild ${guild.id}:`, error);
   }
 
-  const lines = entries.length > 0
-    ? entries.map((e, i) => {
-        const medal = ['🥇', '🥈', '🥉'][i] || `**#${i + 1}**`;
+  const topThree = entries.slice(0, 3);
+  const lines = topThree.length > 0
+    ? topThree.map((e, i) => {
+        const medal = ['🥇', '🥈', '🥉'][i];
         const tier = e.tierLabel ? ` · ${e.tierLabel}` : '';
         return `${medal} **${e.displayName}** — ⏱️ ${formatVoiceDuration(e.totalMs)}${tier}`;
       }).join('\n')
