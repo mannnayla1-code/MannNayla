@@ -5,6 +5,13 @@
 // hanya menandai pola yang punya sinyal kuat agar pesan/file/link normal
 // tidak ikut terhapus.
 
+import { fileURLToPath } from 'url';
+import path from 'path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const TESSDATA_DIR = path.join(__dirname, 'tessdata');
+
 // Domain resmi Discord (dan turunannya) yang TIDAK pernah dianggap phishing.
 export const OFFICIAL_DISCORD_DOMAINS = new Set([
   'discord.com',
@@ -317,9 +324,113 @@ export function findMatchingHash(hash, candidates = [], threshold = HASH_THRESHO
   return null;
 }
 
+// --- OCR: deteksi screenshot scam (withdrawal crypto palsu, giveaway selebriti palsu, dll.) ---
+// Pola teks scam beserta skornya. Hanya menandai gambar sebagai scam bila
+// total skor tinggi ATAU banyak kategori berbeda muncul sekaligus, agar
+// screenshot crypto normal tidak ikut terhapus.
+const OCR_SCAM_PATTERNS = [
+  // Layar "withdrawal success" / penarikan berhasil — sinyal sangat kuat.
+  { pattern: /withdraw(?:al)?\s*success/i, score: 5, category: 'withdrawal' },
+  { pattern: /withdraw(?:al)?\s*successfully/i, score: 5, category: 'withdrawal' },
+  { pattern: /penarikan\s*berhasil/i, score: 5, category: 'withdrawal' },
+  { pattern: /receive\s*usdt/i, score: 3, category: 'withdrawal' },
+  { pattern: /enter\s*wallet\s*address/i, score: 3, category: 'withdrawal' },
+  { pattern: /wallet\s*address/i, score: 2, category: 'withdrawal' },
+  { pattern: /withdraw(?:al)?/i, score: 1, category: 'withdrawal' },
+
+  // Token kripto.
+  { pattern: /\busdt\b/i, score: 1, category: 'crypto' },
+  { pattern: /\btether\b/i, score: 1, category: 'crypto' },
+  { pattern: /\btrx\b|\btron\b/i, score: 1, category: 'crypto' },
+  { pattern: /\bbitcoin\b|\bbtc\b/i, score: 1, category: 'crypto' },
+  { pattern: /\bethereum\b|\beth\b/i, score: 1, category: 'crypto' },
+  { pattern: /\bcrypto(?:currency)?\b/i, score: 1, category: 'crypto' },
+
+  // Bonus / kode promo.
+  { pattern: /promo\s*code/i, score: 3, category: 'bonus' },
+  { pattern: /kode\s*promo/i, score: 3, category: 'bonus' },
+  { pattern: /activate\s*(?:code|bonus)/i, score: 3, category: 'bonus' },
+  { pattern: /claim\s*(?:reward|bonus|your)/i, score: 2, category: 'bonus' },
+  { pattern: /\bbonus(?:es)?\b/i, score: 1, category: 'bonus' },
+
+  // Giveaway / airdrop.
+  { pattern: /giving\s*away/i, score: 3, category: 'giveaway' },
+  { pattern: /\bgiveaway\b/i, score: 2, category: 'giveaway' },
+  { pattern: /\bairdrop\b/i, score: 2, category: 'giveaway' },
+
+  // Selebriti / tokoh yang sering dijadikan palsu giveaway.
+  { pattern: /mrbeast|elon\s*musk|mark\s*zuckerberg|vitalik/i, score: 1, category: 'celebrity' },
+];
+
+const OCR_SCORE_THRESHOLD = 8;
+const OCR_STRONG_THRESHOLD = 5;
+
 /**
- * Analisa buffer gambar: deteksi payload eksekutabel yang menyamar sebagai
- * gambar, lalu cocokkan dHash dengan signature gambar scam.
+ * Analisa teks hasil OCR untuk mendeteksi pola scam.
+ * @returns {{score:number, categories:string[]}|null}
+ */
+export function analyzeOcrText(text) {
+  if (!text) return null;
+  const lower = String(text).toLowerCase();
+
+  let score = 0;
+  let hasStrong = false;
+  const categories = new Set();
+  for (const { pattern, score: s, category } of OCR_SCAM_PATTERNS) {
+    if (pattern.test(lower)) {
+      score += s;
+      categories.add(category);
+      if (s >= 3) hasStrong = true;
+    }
+  }
+
+  // Hanya scam bila: ada satu sinyal kuat (skor≥3) + total≥5, ATAU total skor≥8.
+  const suspicious = (hasStrong && score >= OCR_STRONG_THRESHOLD) || score >= OCR_SCORE_THRESHOLD;
+  if (!suspicious) return null;
+  return { score, categories: [...categories] };
+}
+
+// Worker OCR singleton (lazy) dengan antrian agar tidak membanjiri worker.
+let _ocrWorker = null;
+let _ocrReady = null;
+let _ocrChain = Promise.resolve();
+
+async function getOcrWorker() {
+  if (_ocrWorker) return _ocrWorker;
+  if (!_ocrReady) {
+    _ocrReady = (async () => {
+      const { createWorker } = await import('tesseract.js');
+      const worker = await createWorker('eng');
+      _ocrWorker = worker;
+      return worker;
+    })();
+  }
+  return _ocrReady;
+}
+
+/**
+ * Jalankan OCR terhadap buffer gambar. Panggilan diserialisasi lewat antrian.
+ * @returns {Promise<string>} teks yang dikenali (kosong bila gagal).
+ */
+export async function ocrImage(buffer) {
+  const task = _ocrChain.then(async () => {
+    try {
+      const worker = await getOcrWorker();
+      const { data } = await worker.recognize(buffer);
+      return data?.text || '';
+    } catch {
+      return '';
+    }
+  });
+  _ocrChain = task.catch(() => {});
+  return task;
+}
+
+/**
+ * Analisa buffer gambar:
+ * 1. payload eksekutabel yang menyamar sebagai gambar,
+ * 2. cocokkan dHash dengan signature gambar scam,
+ * 3. OCR teks untuk mendeteksi screenshot scam (withdrawal crypto, giveaway, dll.).
  */
 export async function analyzeImageBuffer(buffer, options = {}) {
   const { knownHashes = [], hashThreshold = HASH_THRESHOLD_DEFAULT } = options;
@@ -352,6 +463,19 @@ export async function analyzeImageBuffer(buffer, options = {}) {
         matched,
       };
     }
+  }
+
+  // Layer OCR: deteksi screenshot scam berdasarkan teks di gambar.
+  const ocrText = await ocrImage(buffer);
+  const ocrResult = analyzeOcrText(ocrText);
+  if (ocrResult) {
+    return {
+      suspicious: true,
+      type: 'photo',
+      reason: `Screenshot scam terdeteksi (OCR: skor ${ocrResult.score}, kategori ${ocrResult.categories.join(', ')})`,
+      hash,
+      ocr: ocrResult,
+    };
   }
 
   return { suspicious: false, type: 'photo', reason: null, hash };
