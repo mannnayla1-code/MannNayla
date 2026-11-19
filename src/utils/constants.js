@@ -48,6 +48,25 @@ export const DEFAULT_GUILD_CONFIG = {
     musicStatus: {
         groups: [],
         live: { channelId: null, messageId: null }
+    },
+    antiScam: {
+        enabled: true,
+        logChannelId: null,
+        deleteMessage: true,
+        warnUser: true,
+        notifyChannel: true,
+        timeoutOnRepeat: true,
+        timeoutThreshold: 3,
+        timeoutDurationMinutes: 60,
+        strikeWindowHours: 24,
+        modules: {
+            photo: true,
+            file: true,
+            link: true
+        },
+        knownScamHashes: [],
+        ignoredChannels: [],
+        ignoredRoles: []
     }
 };
 

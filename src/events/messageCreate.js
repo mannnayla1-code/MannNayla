@@ -20,12 +20,17 @@ import { handleStickyMessage } from '../services/stickyService.js';
 import { handleAutoReaction } from '../services/autoReactionService.js';
 import StreakService from '../services/streakService.js';
 import { trackChatMessage } from '../services/chatLeaderboardService.js';
+import { handleAntiScam } from '../services/antiScamService.js';
 
 export default {
   name: Events.MessageCreate,
   async execute(message, client) {
     try {
       if (!message.guild) return;
+
+      // Anti-Scam Protection: pindai dan hapus pesan scam lebih dulu.
+      const antiScam = await handleAntiScam(message, client);
+      if (antiScam?.detected) return;
 
       // Sticky harus di-repost ke bawah untuk SEMUA pesan (termasuk bot lain),
       // tapi skip pesan dari bot kita sendiri supaya tidak loop.

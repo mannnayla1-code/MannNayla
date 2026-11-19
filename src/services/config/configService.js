@@ -24,7 +24,8 @@ const CONFIG_VALIDATION_RULES = {
     maxTicketsPerUser: { type: 'number', required: false, min: 1, max: 50 },
     birthdayChannelId: { type: 'channel', required: false },
     logIgnore: { type: 'object', required: false },
-    logging: { type: 'object', required: false }
+    logging: { type: 'object', required: false },
+    antiScam: { type: 'object', required: false }
 };
 
 const SETTING_CONFLICTS = {

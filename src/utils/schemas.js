@@ -64,6 +64,32 @@ const StreakConfigSchema = z
   })
   .default({ enabled: false, channelId: null });
 
+const AntiScamModulesSchema = z
+  .object({
+    photo: z.boolean().default(true),
+    file: z.boolean().default(true),
+    link: z.boolean().default(true),
+  })
+  .default({ photo: true, file: true, link: true });
+
+export const AntiScamConfigSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    logChannelId: z.string().nullable().optional(),
+    deleteMessage: z.boolean().default(true),
+    warnUser: z.boolean().default(true),
+    notifyChannel: z.boolean().default(true),
+    timeoutOnRepeat: z.boolean().default(true),
+    timeoutThreshold: z.number().int().min(1).max(20).default(3),
+    timeoutDurationMinutes: z.number().int().min(1).max(10080).default(60),
+    strikeWindowHours: z.number().int().min(1).max(168).default(24),
+    modules: AntiScamModulesSchema,
+    knownScamHashes: z.array(z.string()).default([]),
+    ignoredChannels: z.array(z.string()).default([]),
+    ignoredRoles: z.array(z.string()).default([]),
+  })
+  .default({});
+
 export const GuildConfigSchema = z
   .object({
     prefix: z.string().optional(),
@@ -85,7 +111,8 @@ export const GuildConfigSchema = z
     ticketLogging: TicketLoggingSchema.optional(),
     enableLogging: z.boolean().optional(),
     verification: VerificationConfigSchema,
-    streak: StreakConfigSchema
+    streak: StreakConfigSchema,
+    antiScam: AntiScamConfigSchema
   })
   .passthrough();
 

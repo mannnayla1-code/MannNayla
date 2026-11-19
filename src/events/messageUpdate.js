@@ -2,6 +2,7 @@ import { Events } from 'discord.js';
 import { logEvent, EVENT_TYPES } from '../services/loggingService.js';
 import { logger } from '../utils/logger.js';
 import { formatLogLine } from '../utils/logging/logEmbeds.js';
+import { handleAntiScam } from '../services/antiScamService.js';
 
 const MAX_LOGGED_EDIT_CONTENT_LENGTH = 512;
 
@@ -14,6 +15,10 @@ export default {
       if (!newMessage.guild || newMessage.author?.bot) return;
 
       if (oldMessage.content === newMessage.content) return;
+
+      // Anti-Scam Protection: scam bisa diselipkan lewat edit pesan.
+      const antiScam = await handleAntiScam(newMessage, newMessage.client);
+      if (antiScam?.detected) return;
 
       const metaLines = [
         formatLogLine('Channel', newMessage.channel ? `${newMessage.channel.name} ${newMessage.channel.toString()}` : 'Unknown'),
