@@ -24,19 +24,19 @@ export const SCAM_TYPES = {
     key: 'photo',
     label: 'Photo Scam',
     description: (count) =>
-      `{user} Foto scam terdeteksi (${count} foto) dan udah dihapus. Jangan sampai member lain kena tipu.`,
+      `Foto {user} scam terdeteksi (${count} foto) dan udah dihapus. Jangan sampai member lain kena tipu`,
   },
   file: {
     key: 'file',
     label: 'Suspicious File',
     description: (count) =>
-      `{user} File mencurigakan terdeteksi (${count} file) dan udah dihapus. Jangan sembarangan buka file yang gak jelas.`,
+      `File {user} mencurigakan terdeteksi (${count} file) dan udah dihapus. Jangan sembarangan buka file yang gak jelas`,
   },
   link: {
     key: 'link',
     label: 'Discord Phishing',
     description: (count) =>
-      `{user} Link Discord phising terdeteksi (${count} link) dan udah dihapus. Jangan asal klik link yang gak jelas`,
+      `Link {user} Discord phising terdeteksi (${count} link) dan udah dihapus. Jangan asal klik link yang gak jelas`,
   },
 };
 
