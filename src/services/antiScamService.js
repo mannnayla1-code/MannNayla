@@ -24,19 +24,19 @@ export const SCAM_TYPES = {
     key: 'photo',
     label: 'Photo Scam',
     description: (count) =>
-      `Foto scam terdeteksi (${count} foto) dan udah dihapus. Jangan sampai member lain kena tipu.`,
+      `{user} Foto scam terdeteksi (${count} foto) dan udah dihapus. Jangan sampai member lain kena tipu.`,
   },
   file: {
     key: 'file',
     label: 'Suspicious File',
     description: (count) =>
-      `File mencurigakan terdeteksi (${count} file) dan udah dihapus. Jangan sembarangan buka file yang gak jelas.`,
+      `{user} File mencurigakan terdeteksi (${count} file) dan udah dihapus. Jangan sembarangan buka file yang gak jelas.`,
   },
   link: {
     key: 'link',
     label: 'Discord Phishing',
     description: (count) =>
-      `Link Discord phising terdeteksi (${count} link) dan udah dihapus. Jangan asal klik link yang gak jelas`,
+      `{user} Link Discord phising terdeteksi (${count} link) dan udah dihapus. Jangan asal klik link yang gak jelas`,
   },
 };
 
@@ -50,7 +50,7 @@ const DEFAULT_CONFIG = {
   notifyChannel: true,
   timeoutOnRepeat: true,
   timeoutThreshold: 3,
-  timeoutDurationMinutes: 60,
+  timeoutDurationMinutes: 10,
   strikeWindowHours: 24,
   modules: { photo: true, file: true, link: true },
   knownScamHashes: [],
@@ -141,9 +141,10 @@ function truncate(text, max = 120) {
 
 function buildScamEmbed({ type, count, findings, mode, user, channel, strikeCount, timedOut, timeoutMinutes }) {
   const meta = SCAM_TYPES[type] || SCAM_TYPES.file;
+  const userMention = user ? `<@${user.id}>` : 'Seseorang';
   const embed = createEmbed({
     title: `${POLICE_EMOJI} ${meta.label}`,
-    description: meta.description(count),
+    description: meta.description(count).replace(/\{user\}/g, userMention),
     color: 'error',
   });
 

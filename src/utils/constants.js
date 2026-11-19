@@ -57,7 +57,7 @@ export const DEFAULT_GUILD_CONFIG = {
         notifyChannel: true,
         timeoutOnRepeat: true,
         timeoutThreshold: 3,
-        timeoutDurationMinutes: 60,
+        timeoutDurationMinutes: 10,
         strikeWindowHours: 24,
         modules: {
             photo: true,

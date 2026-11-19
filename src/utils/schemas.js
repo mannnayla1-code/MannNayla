@@ -81,7 +81,7 @@ export const AntiScamConfigSchema = z
     notifyChannel: z.boolean().default(true),
     timeoutOnRepeat: z.boolean().default(true),
     timeoutThreshold: z.number().int().min(1).max(20).default(3),
-    timeoutDurationMinutes: z.number().int().min(1).max(10080).default(60),
+    timeoutDurationMinutes: z.number().int().min(1).max(10080).default(10),
     strikeWindowHours: z.number().int().min(1).max(168).default(24),
     modules: AntiScamModulesSchema,
     knownScamHashes: z.array(z.string()).default([]),
